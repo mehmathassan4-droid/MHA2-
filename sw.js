@@ -1,6 +1,6 @@
 // MHA v34: Supabase app shell cache for offline launch.
 // Supabase authentication and data require an online connection.
-const MHA_SW_VERSION = 'mha-project2-v34-supabase';
+const MHA_SW_VERSION = 'mha-supabase-v35-supabase';
 const SHELL = [
   '/', '/index.html', '/app.js?v=34', '/supabase-adapter.js?v=34', '/manifest.webmanifest?v=34',
   '/icon-32.png', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'

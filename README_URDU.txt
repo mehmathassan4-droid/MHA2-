@@ -1,4 +1,4 @@
-MHA VERSION 34 — SUPABASE BUILD
+MHA VERSION 35 — SUPABASE BUILD
 
 یہ آپ کے پرانے MHA VERSION 33.1 پروجیکٹ کی اپڈیٹ ہے۔ موجودہ MHA ڈیزائن، آئیکنز، انوائس لے آؤٹ اور کاروباری ماڈیولز برقرار رکھے گئے ہیں۔ اب لاگ اِن اور ایپ کا نیا ڈیٹا Supabase کے ذریعے چلتا ہے۔ پرانا Firebase ڈیٹا نہ حذف کیا گیا ہے، نہ تبدیل، نہ منتقل۔
 
@@ -39,3 +39,14 @@ MHA VERSION 34 — SUPABASE BUILD
 - live Supabase/Vercel credentials کے ساتھ end-to-end runtime test نہیں کیا جا سکا۔ پہلے test records سے جانچیں۔
 - Supabase publishable key browser میں استعمال ہوتی ہے؛ کبھی بھی service_role یا secret key فرنٹ اینڈ میں نہ ڈالیں۔
 - پہلی مرتبہ app load اور login کے لیے انٹرنیٹ ضروری ہے۔
+
+
+MHA VERSION 35 DASHBOARD UPDATE
+- Dashboard now starts with a sales trend line chart for the last six months.
+- Monthly / Weekly toggle switches to the current month's weekly sales trend.
+- Added top-selling product ranking and product sales value summary.
+- Added KPI cards for sales, gross profit, expenses, net profit, products, stores, stock quantity, monthly orders and returns.
+- Added compact Quick Access tiles with Orders first.
+- Improved global green/white palette, form readability, table typography and compact edit/delete action sizing.
+- Added MHA_Editable_Invoice_Template.xlsx to the project bundle.
+IMPORTANT: The Excel workbook is currently an editable design template. Automatic import of workbook changes into the app is not yet wired; this requires a separate tested Excel-import feature.

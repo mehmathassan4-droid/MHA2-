@@ -28,16 +28,66 @@ async function loadProducts(){try{const s=await db.collection('products').get();
 async function loadStores(){try{const s=await db.collection('stores').get();stores=s.docs.map(d=>({id:d.id,...d.data()}))}catch(e){stores=[]}const all=new Map(stores.map(x=>[x.id,x]));mhaLocalRows('stores').forEach(x=>{if(!all.has(x.id))all.set(x.id,x)});stores=[...all.values()];mhaSaveLocalRows('stores',stores);return stores}
 async function dashboard(){
   await Promise.all([loadProducts(),loadStores()]);
-  const now=new Date(), y=now.getFullYear(), m=now.getMonth();
-  const os=(await db.collection('orders').get().catch(()=>({docs:[]}))).docs.map(d=>d.data()).filter(o=>!['cancelled','rejected'].includes(o.status));
-  const rs=(await db.collection('returns').get().catch(()=>({docs:[]}))).docs.map(d=>d.data());
-  const fs=(await db.collection('finance').get().catch(()=>({docs:[]}))).docs.map(d=>d.data());
-  const inMonth=d=>{const ts=d.createdAt?.toDate?d.createdAt.toDate():new Date(d.date||d.createdAt||0);return ts.getFullYear()===y&&ts.getMonth()===m};
-  const ms=os.filter(inMonth), mf=fs.filter(inMonth), mr=rs.filter(inMonth);
-  const sales=ms.reduce((a,x)=>a+Number(x.total||0),0), gp=ms.reduce((a,x)=>a+Number(x.profit||0),0), ret=mr.reduce((a,x)=>a+Number(x.amount||0),0);
-  const expenses=mf.filter(x=>x.type!=='owner_investment').reduce((a,x)=>a+Number(x.amount||0),0), interest=mf.filter(x=>x.type==='interest').reduce((a,x)=>a+Number(x.amount||0),0), investment=mf.filter(x=>x.type==='owner_investment').reduce((a,x)=>a+Number(x.amount||0),0);
-  const net=gp-ret-expenses;
-  shell(`<div class="grid"><div class="card dash-blue"><div>Monthly Sales</div><div class="metric">${money(sales)}</div></div><div class="card dash-teal"><div>Gross Profit</div><div class="metric">${money(gp)}</div></div><div class="card dash-gold"><div>Monthly Expenses</div><div class="metric">${money(expenses)}</div></div><div class="card"><div>Net Profit / Savings</div><div class="metric">${money(net)}</div></div></div><div class="two" style="margin-top:12px"><div class="card"><h2>Company Summary</h2><div class="notice">Returns: <b>${money(ret)}</b></div><div class="notice">Interest / Financial Cost: <b>${money(interest)}</b></div><div class="notice">Owner Investment: <b>${money(investment)}</b></div><div class="notice success">Cloud data: invoices, stores and reports are stored in Supabase.</div></div><div class="card"><h2>Quick Control</h2><p class="muted">Admin can use Booker Mode to make the same store order flow.</p>${owner()?`<button class="btn primary" id="modeToggle">${bookerMode?'Back to Admin Mode':'Use Booker Mode'}</button>`:''}</div></div>`,'dashboard');
+  const now=new Date(), year=now.getFullYear(), month=now.getMonth();
+  const [orderSnap,returnSnap,financeSnap,receiptSnap]=await Promise.all([
+    db.collection('orders').get().catch(()=>({docs:[]})),
+    db.collection('returns').get().catch(()=>({docs:[]})),
+    db.collection('finance').get().catch(()=>({docs:[]})),
+    db.collection('stockReceipts').get().catch(()=>({docs:[]}))
+  ]);
+  const orders=orderSnap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>!['cancelled','rejected'].includes(o.status));
+  const returns=returnSnap.docs.map(d=>d.data());
+  const finances=financeSnap.docs.map(d=>d.data());
+  const receipts=receiptSnap.docs.map(d=>d.data());
+  const asDate=v=>{try{const d=v?.toDate?v.toDate():new Date(v||0);return Number.isNaN(d.getTime())?null:d}catch(_){return null}};
+  const orderDate=o=>asDate(o.createdAt||o.date||o.orderDate);
+  const sum=(a,fn)=>a.reduce((n,x)=>n+Number(fn(x)||0),0);
+  const monthOrders=orders.filter(o=>{const d=orderDate(o);return d&&d.getFullYear()===year&&d.getMonth()===month});
+  const monthReturns=returns.filter(x=>{const d=asDate(x.createdAt||x.date);return d&&d.getFullYear()===year&&d.getMonth()===month});
+  const monthFinance=finances.filter(x=>{const d=asDate(x.createdAt||x.date);return d&&d.getFullYear()===year&&d.getMonth()===month});
+  const sales=sum(monthOrders,o=>o.total||o.netTotal);
+  const gross=sum(monthOrders,o=>o.profit);
+  const returned=sum(monthReturns,x=>x.amount||x.totalAmount);
+  const expenses=sum(monthFinance,x=>x.type!=='owner_investment'&&x.type!=='supplier_payment'?x.amount:0);
+  const net=gross-returned-expenses;
+  const stockIn={}; const stockOut={}; const stockBack={};
+  receipts.forEach(r=>{const id=r.productId||r.product_id;if(id)stockIn[id]=(stockIn[id]||0)+Number(r.qty||r.quantity||0)});
+  orders.forEach(o=>(o.items||[]).forEach(i=>{const id=i.productId||i.product_id;if(id)stockOut[id]=(stockOut[id]||0)+Number(i.qty||i.quantity||0)}));
+  returns.forEach(r=>{const id=r.productId||r.product_id;if(id)stockBack[id]=(stockBack[id]||0)+Number(r.qty||r.quantity||0)});
+  const stockQty=products.reduce((n,p)=>n+Math.max(0,(stockIn[p.id]||0)-(stockOut[p.id]||0)+(stockBack[p.id]||0)),0);
+  const ranked={};
+  orders.forEach(o=>(o.items||[]).forEach(i=>{const id=i.productId||i.product_id;const key=id||i.productName||i.name||'Unknown';if(!ranked[key])ranked[key]={name:i.productName||i.name||products.find(p=>p.id===id)?.name||'Product',qty:0,sales:0};ranked[key].qty+=Number(i.qty||i.quantity||0);ranked[key].sales+=Number(i.net||i.netAmount||i.total||0)}));
+  const topProducts=Object.values(ranked).sort((a,b)=>b.qty-a.qty).slice(0,6);
+  const recentMonths=[];
+  for(let k=5;k>=0;k--){const d=new Date(year,month-k,1);const yy=d.getFullYear(),mm=d.getMonth();const rows=orders.filter(o=>{const od=orderDate(o);return od&&od.getFullYear()===yy&&od.getMonth()===mm});recentMonths.push({label:d.toLocaleDateString('en',{month:'short'}),sales:sum(rows,o=>o.total||o.netTotal),profit:sum(rows,o=>o.profit)})}
+  const weekRows=Array.from({length:5},(_,i)=>{const lo=i*7+1,hi=Math.min((i+1)*7, new Date(year,month+1,0).getDate());const rows=monthOrders.filter(o=>{const d=orderDate(o);return d&&d.getDate()>=lo&&d.getDate()<=hi});return {label:`W${i+1}`,range:`${lo}–${hi}`,sales:sum(rows,o=>o.total||o.netTotal),profit:sum(rows,o=>o.profit)}});
+  const maxV=Math.max(1,...recentMonths.map(x=>x.sales),...weekRows.map(x=>x.sales));
+  const chart=(rows,field)=>{const w=620,h=210,pad=34,step=(w-pad*2)/Math.max(1,rows.length-1),pts=rows.map((r,i)=>`${pad+i*step},${h-pad-(Number(r[field]||0)/maxV)*(h-pad*2)}`).join(' ');return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Sales trend chart" style="width:100%;height:auto;display:block"><line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#d6e5dc"/><line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="#d6e5dc"/><polyline points="${pts}" fill="none" stroke="#16834a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>${rows.map((r,i)=>{const x=pad+i*step,y=h-pad-(Number(r[field]||0)/maxV)*(h-pad*2);return `<circle cx="${x}" cy="${y}" r="5" fill="#16834a"/><text x="${x}" y="${h-8}" text-anchor="middle" font-size="12" fill="#607267">${esc(r.label)}</text>`}).join('')}</svg>`};
+  const tiles=[['orders','Orders','Create and view orders','shopping-cart'],['products','Products','Medicine and item list','package'],['stores','Stores','Customer medical stores','store'],['prices','Store Prices','Store-wise rates','tags'],['stock','Stock & Purchases','Purchases, batches, expiry','boxes'],['sales','Sales & Profit','Sales and profit report','chart'],['bookers','Booker Analytics','Booker performance','users'],['employees','Employees','Staff and salaries','user'],['payments','Invoice Payments','Payments received','wallet'],['salesHistory','History & Monthly','Previous records','calendar'],['invoice','Invoice','Create and print invoice','file'],['finance','Finance','Expenses and accounts','calculator']];
+  shell(`<style>
+  .mha-dash{display:grid;gap:14px}.mha-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.mha-kpi{padding:14px;border:1px solid #e0eee5;border-radius:14px;background:linear-gradient(145deg,#fff,#f1faf4);min-width:0}.mha-kpi small{font-size:13px;color:#587064;font-weight:600}.mha-kpi strong{display:block;font-size:clamp(17px,3vw,23px);margin-top:7px;overflow-wrap:anywhere;color:#176c3e}.mha-tilegrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.mha-tile{border:1px solid #deebe2;border-radius:13px;padding:13px 10px;background:#fff;text-align:left;min-height:94px;color:#1d3929;cursor:pointer}.mha-tile b{display:block;font-size:14px;margin:7px 0 3px}.mha-tile span{font-size:11px;color:#65786d;line-height:1.35}.mha-tile .tileicon{font-size:21px;color:#16834a}.mha-chartwrap{display:grid;grid-template-columns:1fr 1fr;gap:12px}.mha-productrow{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #edf2ee;font-size:13px}.mha-productrow:last-child{border:0}.mha-bar{height:7px;background:#e8f2eb;border-radius:20px;margin-top:6px;overflow:hidden}.mha-bar i{display:block;height:100%;background:#16834a;border-radius:20px}@media(max-width:650px){.mha-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mha-tilegrid{grid-template-columns:repeat(3,minmax(0,1fr))}.mha-chartwrap{grid-template-columns:1fr}.mha-tile{min-height:88px;padding:10px 8px}.mha-tile b{font-size:12px}.mha-tile span{font-size:10px}}@media(max-width:390px){.mha-tilegrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  </style><div class="mha-dash">
+    <div class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><h2 style="margin:0">Business Trend</h2><div class="muted">Monthly and weekly sales movement</div></div><div style="display:flex;gap:6px"><button class="btn primary" id="trendMonth">Monthly</button><button class="btn" id="trendWeek">Weekly</button></div></div><div id="trendChart" style="margin-top:12px">${chart(recentMonths,'sales')}</div><div id="trendLegend" class="muted" style="font-size:12px">Sales trend · last 6 months</div></div>
+    <div class="mha-chartwrap"><div class="card"><h3>Top Selling Products</h3>${topProducts.length?topProducts.map((p,i)=>`<div class="mha-productrow"><div style="flex:1;min-width:0"><b>${i+1}. ${esc(p.name)}</b><div class="mha-bar"><i style="width:${Math.max(4,p.qty/Math.max(1,topProducts[0].qty)*100)}%"></i></div></div><b>${p.qty}</b></div>`).join(''):'<div class="empty">No sales data yet.</div>'}</div><div class="card"><h3>Monthly Product Movement</h3>${topProducts.length?topProducts.slice(0,4).map(p=>`<div class="mha-productrow"><span>${esc(p.name)}</span><b>${money(p.sales)}</b></div>`).join(''):'<div class="empty">Product sales will appear here.</div>'}</div></div>
+    <div class="mha-kpis">
+      <div class="mha-kpi"><small>Monthly Sales</small><strong>${money(sales)}</strong></div>
+      <div class="mha-kpi"><small>Gross Profit</small><strong>${money(gross)}</strong></div>
+      <div class="mha-kpi"><small>Monthly Expenses</small><strong>${money(expenses)}</strong></div>
+      <div class="mha-kpi"><small>Net Profit</small><strong>${money(net)}</strong></div>
+      <div class="mha-kpi"><small>Products</small><strong>${products.length}</strong></div>
+      <div class="mha-kpi"><small>Stores</small><strong>${stores.length}</strong></div>
+      <div class="mha-kpi"><small>Stock Quantity</small><strong>${stockQty.toLocaleString('en-PK')}</strong></div>
+      <div class="mha-kpi"><small>Orders This Month</small><strong>${monthOrders.length}</strong></div>
+      <div class="mha-kpi"><small>Returns</small><strong>${money(returned)}</strong></div>
+    </div>
+    <div class="card"><h2>Quick Access</h2><div class="mha-tilegrid">${tiles.filter(x=>owner()||!['bookers','employees','finance'].includes(x[0])).map(x=>`<button class="mha-tile" type="button" data-quick-nav="${x[0]}"><div class="tileicon">▦</div><b>${x[1]}</b><span>${x[2]}</span></button>`).join('')}</div></div>
+    ${owner()?`<div class="card"><h3>Admin Control</h3><p class="muted">Admin can switch to Booker Mode and create orders using the same order workflow.</p><button class="btn primary" id="modeToggle">${bookerMode?'Back to Admin Mode':'Use Booker Mode'}</button></div>`:''}
+  </div>`,'dashboard');
+  let trendMode='month';
+  const drawTrend=()=>{const rows=trendMode==='month'?recentMonths:weekRows;document.getElementById('trendChart').innerHTML=chart(rows,'sales');document.getElementById('trendLegend').textContent=trendMode==='month'?'Sales trend · last 6 months':'Sales trend · selected month by week (W1–W5)';document.getElementById('trendMonth').className='btn'+(trendMode==='month'?' primary':'');document.getElementById('trendWeek').className='btn'+(trendMode==='week'?' primary':'')};
+  document.getElementById('trendMonth')?.addEventListener('click',()=>{trendMode='month';drawTrend()});
+  document.getElementById('trendWeek')?.addEventListener('click',()=>{trendMode='week';drawTrend()});
+  document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click',()=>route(b.dataset.quickNav)));
   document.getElementById('modeToggle')?.addEventListener('click',()=>{bookerMode=!bookerMode;localStorage.setItem('mha_booker_mode',bookerMode?'1':'0');route('dashboard')});
 }
 
