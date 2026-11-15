@@ -131,3 +131,41 @@ begin
 end;
 $$;
 grant execute on function public.mha_create_profile_request(uuid,text,text) to anon, authenticated;
+
+
+-- MHA v38: allow Bookers to save their own stores and submit price requests.
+-- Existing approved-user read policy is intentionally preserved for the current
+-- stock calculation workflow. UI filters are not a substitute for strict RLS.
+drop policy if exists "MHA approved users insert" on public.mha_documents;
+create policy "MHA approved users insert" on public.mha_documents
+for insert to authenticated
+with check (
+  public.mha_is_approved(auth.uid()) and (
+    (public.mha_is_admin(auth.uid()) and collection <> 'profiles')
+    or (collection in ('orders','returns','invoicePayments') and data->>'createdBy'=auth.uid()::text)
+    or (collection='stores' and data->>'createdBy'=auth.uid()::text)
+    or (collection='priceRequests' and data->>'requestedBy'=auth.uid()::text and data->>'status'='pending')
+  )
+);
+
+drop policy if exists "MHA approved admins update" on public.mha_documents;
+create policy "MHA approved admins update" on public.mha_documents
+for update to authenticated
+using (
+  (public.mha_is_admin(auth.uid()) and collection <> 'profiles')
+  or (collection='orders' and data->>'createdBy'=auth.uid()::text)
+  or (collection='stores' and data->>'createdBy'=auth.uid()::text)
+)
+with check (
+  (public.mha_is_admin(auth.uid()) and collection <> 'profiles')
+  or (collection='orders' and data->>'createdBy'=auth.uid()::text)
+  or (collection='stores' and data->>'createdBy'=auth.uid()::text)
+);
+
+drop policy if exists "MHA approved admins delete" on public.mha_documents;
+create policy "MHA approved admins delete" on public.mha_documents
+for delete to authenticated
+using (
+  (public.mha_is_admin(auth.uid()) and collection <> 'profiles')
+  or (collection='stores' and data->>'createdBy'=auth.uid()::text)
+);
